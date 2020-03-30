@@ -19,25 +19,113 @@ import Foundation
 
 
 public struct Bread {
-    public enum BreadType: UInt32 {
-        case small = 1
-        case medium
-        case big
+  public enum BreadType: UInt32 {
+    case small = 1
+    case medium
+    case big
+  }
+  
+  public let breadType: BreadType
+  
+  public static func make() -> Bread {
+    guard let breadType = Bread.BreadType(rawValue: UInt32(arc4random_uniform(3) + 1)) else {
+      fatalError("Incorrect random value")
     }
     
-    public let breadType: BreadType
-    
-    public static func make() -> Bread {
-        guard let breadType = Bread.BreadType(rawValue: UInt32(arc4random_uniform(3) + 1)) else {
-            fatalError("Incorrect random value")
-        }
-        
-        return Bread(breadType: breadType)
-    }
-    
-    public func bake() {
-        let bakeTime = breadType.rawValue
-        sleep(UInt32(bakeTime))
-    }
+    return Bread(breadType: breadType)
+  }
+  
+  public func bake() {
+    let bakeTime = breadType.rawValue
+    sleep(UInt32(bakeTime))
+  }
 }
 
+let bread = Bread.make()
+
+
+/// Хранилище хлеба
+struct BreadStorage {
+  private(set) var arrayStorage = [Bread]()
+  let condition = NSCondition()
+  let mutex = NSRecursiveLock()
+  var isOpen = false
+  
+  
+  mutating func push(_ bread: Bread) {
+    mutex.lock()
+    isOpen = true
+    arrayStorage.append(bread)
+    
+    print("Добавлена заготовка \(arrayStorage.last!.breadType) на складе \(arrayStorage.count)")
+    
+    condition.signal()
+    
+    mutex.unlock()
+  }
+  
+  mutating func pop() -> Bread? {
+    if !isOpen {
+      condition.wait()
+    }
+    
+    mutex.lock()
+    mutex.unlock()
+    return !arrayStorage.isEmpty ? arrayStorage.removeLast() : nil
+  }
+}
+
+var storageBreadArray = BreadStorage()
+
+//Порождающий поток должен каждые 2 секунды создавать новый экземпляр структуры Bread используя метод make().
+//Созданный экземпляр он должен положить в хранилище, работающее по принципу LIFO. (хранилище нужно создать самостоятельно)
+//Выполнение порождающего потока должно длиться 20 секунд.
+
+/// Продолжающий поток
+final class GeneratingThread: Thread {
+  
+  override func main() {
+    let timer = Timer(timeInterval: 2,
+                      repeats: true) { _ in
+                        guard !self.isCancelled else { return }
+                        storageBreadArray.push(bread)
+    }
+    RunLoop.current.add(timer, forMode: .default)
+    RunLoop.current.run()
+  }
+  
+}
+
+//Во время того, как рабочий поток “печет хлеб” порождающий поток продолжает выполнение и при срабатывании таймера должен также положить новую сущность Bread в хранилище.
+//После окончания выполнения порождающего потока рабочий поток обрабатывает экземпляры Bread, оставшиеся в хранилище, и тоже заканчивает свое выполнение.
+
+
+//Рабочий поток должен ожидать появления экземпляров структуры Bread в хранилище.
+//При его появлении рабочий поток забирает один “хлеб” из хранилища и вызывает метод bake().
+//Также он поступает и с другими экземплярами если они есть в хранилище. Если нет, то снова приостанавливается в ожидании.
+
+/// Рабочий поток
+final class WorkThread: Thread {
+  
+  override func main() {
+    while !isCancelled { }
+    
+    while !storageBreadArray.arrayStorage.isEmpty {
+      storageBreadArray.pop()?.bake()
+      print("Выпекаем хлеб, осталось заготовок: \(storageBreadArray.arrayStorage.count)")
+    }
+    print("Процесс завершен в хранилище осталось: \(storageBreadArray.arrayStorage.count) заготовок")
+  }
+}
+
+
+//Добавьте также в плейграунд код, создающий экземпляры этих потоков и запускающий их выполнение.
+
+let breadStorage = BreadStorage()
+let generatingThread = GeneratingThread()
+let workThread = WorkThread()
+generatingThread.start()
+workThread.start()
+sleep(20)
+generatingThread.cancel()
+workThread.cancel()
