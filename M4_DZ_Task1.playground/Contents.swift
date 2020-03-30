@@ -1,23 +1,6 @@
 import Foundation
 
-//В этом практическом задании вам предстоит написать многопоточный код в playground, используя класс Thread. В папке с заданием лежит файл Bread.swift с одноименной структурой, которую нужно будет использовать при выполнении задания. Для этого добавьте его в свой плейграунд. Менять код в этом файле нельзя.
-//
-//Функциональные требования
-//
-//Выполнять задание нужно в playground.
-//Необходимо создать два сабкласса Thread. Один из них будет порождающим потоком, а второй рабочим.
-//Порождающий поток должен каждые 2 секунды создавать новый экземпляр структуры Bread используя метод make().
-//Созданный экземпляр он должен положить в хранилище, работающее по принципу LIFO. (хранилище нужно создать самостоятельно)
-//Выполнение порождающего потока должно длиться 20 секунд.
-//Хранилище для “хлеба” должно быть потокобезопасно.
-//Рабочий поток должен ожидать появления экземпляров структуры Bread в хранилище.
-//При его появлении рабочий поток забирает один “хлеб” из хранилища и вызывает метод bake().
-//Также он поступает и с другими экземплярами если они есть в хранилище. Если нет, то снова приостанавливается в ожидании.
-//Во время того, как рабочий поток “печет хлеб” порождающий поток продолжает выполнение и при срабатывании таймера должен также положить новую сущность Bread в хранилище.
-//После окончания выполнения порождающего потока рабочий поток обрабатывает экземпляры Bread, оставшиеся в хранилище, и тоже заканчивает свое выполнение.
-//Добавьте также в плейграунд код, создающий экземпляры этих потоков и запускающий их выполнение.
-
-
+//MARK:Стурктура Хлеб заданная в условии
 public struct Bread {
   public enum BreadType: UInt32 {
     case small = 1
@@ -26,7 +9,6 @@ public struct Bread {
   }
   
   public let breadType: BreadType
-  
   public static func make() -> Bread {
     guard let breadType = Bread.BreadType(rawValue: UInt32(arc4random_uniform(3) + 1)) else {
       fatalError("Incorrect random value")
@@ -41,86 +23,80 @@ public struct Bread {
   }
 }
 
-let bread = Bread.make()
-
-
-/// Хранилище хлеба
-struct BreadStorage {
+//MARK: Хранилище хлеба
+public struct BreadStorage {
   private(set) var arrayStorage = [Bread]()
+  /// для получения сигнала о том что поток свободен
   let condition = NSCondition()
+  /// для блокировки и разблокировки потока
   let mutex = NSRecursiveLock()
+  /// флаг для отметки что поток свободен/занят
   var isOpen = false
   
+  var count: Int {
+    storageBreadArray.arrayStorage.count
+  }
   
+  /// добавляем Хлеб в хранилищие
   mutating func push(_ bread: Bread) {
-    mutex.lock()
     isOpen = true
+    ///блокируем поток
+    mutex.lock()
     arrayStorage.append(bread)
-    
-    print("Добавлена заготовка \(arrayStorage.last!.breadType) на складе \(arrayStorage.count)")
-    
+    print("Добавлена заготовка \(arrayStorage.last!.breadType) на складе \(arrayStorage.count) шт.")
+    isOpen = false
+    /// сигнилизируем что поток будет освобожден
     condition.signal()
-    
+    /// разблокируем поток
     mutex.unlock()
   }
   
   mutating func pop() -> Bread? {
-    if !isOpen {
+    /// если поток закрыт или пустой, ждем
+    if isOpen || arrayStorage.isEmpty {
       condition.wait()
     }
     
     mutex.lock()
+    let bread = !arrayStorage.isEmpty ? arrayStorage.removeLast() : nil
     mutex.unlock()
-    return !arrayStorage.isEmpty ? arrayStorage.removeLast() : nil
+    return bread
   }
 }
-
+/// экземпляр хранилища
 var storageBreadArray = BreadStorage()
 
-//Порождающий поток должен каждые 2 секунды создавать новый экземпляр структуры Bread используя метод make().
-//Созданный экземпляр он должен положить в хранилище, работающее по принципу LIFO. (хранилище нужно создать самостоятельно)
-//Выполнение порождающего потока должно длиться 20 секунд.
-
-/// Продолжающий поток
+//MARK: Продолжающий поток
 final class GeneratingThread: Thread {
   
   override func main() {
     let timer = Timer(timeInterval: 2,
                       repeats: true) { _ in
                         guard !self.isCancelled else { return }
+                        /// для каждого цикла создаем рандомный экземпляр хлеба
+                        let bread = Bread.make()
+                        /// кладем заготовку в хранилище
                         storageBreadArray.push(bread)
     }
     RunLoop.current.add(timer, forMode: .default)
     RunLoop.current.run()
   }
-  
 }
 
-//Во время того, как рабочий поток “печет хлеб” порождающий поток продолжает выполнение и при срабатывании таймера должен также положить новую сущность Bread в хранилище.
-//После окончания выполнения порождающего потока рабочий поток обрабатывает экземпляры Bread, оставшиеся в хранилище, и тоже заканчивает свое выполнение.
-
-
-//Рабочий поток должен ожидать появления экземпляров структуры Bread в хранилище.
-//При его появлении рабочий поток забирает один “хлеб” из хранилища и вызывает метод bake().
-//Также он поступает и с другими экземплярами если они есть в хранилище. Если нет, то снова приостанавливается в ожидании.
-
-/// Рабочий поток
+//MARK: Рабочий поток
 final class WorkThread: Thread {
   
   override func main() {
-    while !isCancelled { }
-    
-    while !storageBreadArray.arrayStorage.isEmpty {
+    /// пока поток закрыт или хранилище имеет заготовки, выпекаем хлеб
+    while !isCancelled || !storageBreadArray.arrayStorage.isEmpty {
       storageBreadArray.pop()?.bake()
-      print("Выпекаем хлеб, осталось заготовок: \(storageBreadArray.arrayStorage.count)")
+      print("Выпекаем хлеб, осталось заготовок: \(storageBreadArray.count)")
     }
-    print("Процесс завершен в хранилище осталось: \(storageBreadArray.arrayStorage.count) заготовок")
+    print("Процесс завершен в хранилище осталось: \(storageBreadArray.count) заготовок")
   }
 }
 
-
-//Добавьте также в плейграунд код, создающий экземпляры этих потоков и запускающий их выполнение.
-
+//MARK: Проверяем решение
 let breadStorage = BreadStorage()
 let generatingThread = GeneratingThread()
 let workThread = WorkThread()
@@ -129,3 +105,4 @@ workThread.start()
 sleep(20)
 generatingThread.cancel()
 workThread.cancel()
+
